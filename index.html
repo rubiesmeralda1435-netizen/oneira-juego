@@ -1,0 +1,429 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ONEIRA</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,300;9..144,500&display=swap">
+<script type="importmap">{"imports":{"three":"https://unpkg.com/three@0.160.0/build/three.module.js","three/addons/":"https://unpkg.com/three@0.160.0/examples/jsm/"}}</script>
+<style>
+*{box-sizing:border-box;margin:0}
+html,body{height:100%;overflow:hidden;background:#1d1533;font-family:'Fraunces',Georgia,serif;color:#fff3d6}
+#c{position:fixed;inset:0;width:100%;height:100%;display:block}
+body.play #c{cursor:none}
+#flash,#rayo{position:fixed;inset:0;background:#fff;opacity:0;pointer-events:none}
+#flash{background:#fffdf5}
+#hud{position:fixed;top:0;left:0;right:0;display:none;justify-content:space-between;align-items:center;gap:12px;padding:14px 22px;pointer-events:none;font-size:18px;text-shadow:0 1px 8px rgba(20,10,50,.8)}
+body.play #hud{display:flex}
+#hud b{font-weight:500;letter-spacing:.04em}
+#hTime{font-size:26px;min-width:3ch;text-align:center}
+.btn{font:inherit;font-size:17px;color:#fff3d6;background:rgba(255,255,255,.09);border:1px solid rgba(185,166,255,.7);border-radius:999px;padding:11px 26px;cursor:pointer;pointer-events:auto;transition:background .2s,transform .15s,border-color .2s}
+.btn:hover{background:rgba(255,184,154,.28);border-color:#ffb89a;transform:translateY(-2px)}
+.btn:focus-visible{outline:3px solid #ffe27a;outline-offset:3px}
+.btn:disabled{opacity:.45;cursor:wait}
+#mira{position:fixed;left:0;top:0;width:44px;height:44px;margin:-22px 0 0 -22px;pointer-events:none;display:none;border:2px solid #fff3d6;border-radius:50%;box-shadow:0 0 14px #ffe27a,inset 0 0 10px #b9a6ff}
+#mira::after{content:'';position:absolute;left:50%;top:50%;width:6px;height:6px;margin:-3px;border-radius:50%;background:#fff;box-shadow:0 0 10px 3px #ffe27a}
+body.play #mira{display:block}
+.pan{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;text-align:center;padding:24px;background:radial-gradient(ellipse at 50% 40%,rgba(70,40,120,.5),rgba(20,12,45,.85));backdrop-filter:blur(6px)}
+.hidden{display:none!important}
+h1{font-size:clamp(56px,11vw,128px);font-weight:300;line-height:1;letter-spacing:.28em;margin-right:-.28em;text-shadow:0 0 44px #b9a6ff}
+h2{font-size:clamp(34px,6vw,60px);font-weight:300;text-shadow:0 0 30px #b9a6ff}
+p{max-width:540px;line-height:1.6;font-size:18px;margin-bottom:8px}
+.niv{display:flex;flex-direction:column;gap:10px;width:min(420px,100%)}
+#carga{font-size:15px;opacity:.7}
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div id="flash"></div><div id="rayo"></div>
+<div id="hud"><b id="hNivel"></b><span id="hCap"></span><span id="hTime">60</span><button class="btn" id="bMenu">Menú Principal</button></div>
+<div id="mira"></div>
+
+<div id="caratula" class="pan">
+  <h1>ONEIRA</h1>
+  <p>Eres el Guardián Nocturno. Apunta con el mouse y haz clic para lanzar esferas de luz y atrapar a los Espíritus Celestes antes de que acabe el tiempo.</p>
+  <div class="niv">
+    <button class="btn nv" data-n="0" disabled>Nivel 1: Atardecer de Algodón</button>
+    <button class="btn nv" data-n="1" disabled>Nivel 2: La Vía Láctea Invertida</button>
+    <button class="btn nv" data-n="2" disabled>Nivel 3: Vértice de la Tormenta Nocturna</button>
+  </div>
+  <span id="carga">Cargando modelos…</span>
+</div>
+
+<div id="fin" class="pan hidden">
+  <h2 id="fTitulo"></h2>
+  <p id="fTexto"></p>
+  <button class="btn" id="fBtn"></button>
+  <button class="btn" id="fMenu">Menú Principal</button>
+</div>
+
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+const $ = s => document.querySelector(s);
+const rand = (a, b) => a + Math.random() * (b - a);
+const V3 = (x = 0, y = 0, z = 0) => new THREE.Vector3(x, y, z);
+
+/* ---------- Renderer, cámara, luces ---------- */
+const canvas = $('#c');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(60, 1, 0.1, 400);
+camera.position.set(0, 3, 14);
+camera.lookAt(0, 3, -10);
+scene.add(camera);
+function resize() {
+  renderer.setSize(innerWidth, innerHeight);
+  camera.aspect = innerWidth / innerHeight;
+  camera.updateProjectionMatrix();
+}
+addEventListener('resize', resize); resize();
+const amb = new THREE.AmbientLight(0xffffff, 1.4); scene.add(amb);
+const sun = new THREE.DirectionalLight(0xfff5e4, 1.8); sun.position.set(5, 12, 10); scene.add(sun);
+
+/* ---------- Modelos: carga, medición, escalado y respaldo ---------- */
+const M = (c, e = 0) => new THREE.MeshStandardMaterial({ color: c, roughness: .5, emissive: c, emissiveIntensity: e });
+function respaldo(ruta) {
+  const g = new THREE.Group();
+  const add = (geo, mat, x = 0, y = 0, z = 0, sx = 1, sy = 1, sz = 1) => {
+    const m = new THREE.Mesh(geo, mat); m.position.set(x, y, z); m.scale.set(sx, sy, sz); g.add(m); return m;
+  };
+  const S = r => new THREE.SphereGeometry(r, 20, 14);
+  if (ruta.includes('varita')) {
+    add(new THREE.CylinderGeometry(.03, .05, 1, 12), M(0xd9b3ff, .2));
+    add(new THREE.OctahedronGeometry(.13), M(0xfff0a0, .8), 0, .56, 0);
+  } else if (ruta.includes('luna')) {
+    add(new THREE.TorusGeometry(.6, .22, 14, 36, Math.PI * 1.4), M(0xfff0a8, .4)).rotation.z = Math.PI * .8;
+  } else if (ruta.includes('estrella')) {
+    const s = new THREE.Shape();
+    for (let i = 0; i < 10; i++) { const r = i % 2 ? .38 : .85, a = i * Math.PI / 5 + Math.PI / 2; s[i ? 'lineTo' : 'moveTo'](Math.cos(a) * r, Math.sin(a) * r); }
+    add(new THREE.ExtrudeGeometry(s, { depth: .3, bevelEnabled: false }), M(0xffe27a, .5), 0, 0, -.15);
+  } else if (ruta.includes('nube_personaje')) {
+    const m = M(0xffffff, .25);
+    add(S(.5), m); add(S(.38), m, -.5, -.1, 0); add(S(.38), m, .5, -.1, 0); add(S(.34), m, 0, .3, 0);
+    const o = M(0x55407a); add(S(.06), o, -.15, .02, .45); add(S(.06), o, .15, .02, .45);
+  } else if (ruta.includes('plataforma')) {
+    const m = M(0xfff0fa, .3);
+    add(S(1), m, 0, 0, 0, 1.6, .5, 1); add(S(.8), m, -1.4, -.05, 0, 1.3, .5, .9); add(S(.8), m, 1.4, -.05, 0, 1.3, .5, .9);
+  } else {
+    const m = M(0xd9c6ff, .25), t = M(0xffb3c7, .3);
+    add(new THREE.BoxGeometry(6, 6, 4), m, 0, -3, 0);
+    for (const x of [-4, 4]) { add(new THREE.CylinderGeometry(1, 1.1, 10, 16), m, x, -1, 0); add(new THREE.ConeGeometry(1.5, 3.5, 16), t, x, 5.7, 0); }
+    add(new THREE.CylinderGeometry(1.2, 1.3, 9, 16), m, 0, 1.5, 0); add(new THREE.ConeGeometry(1.8, 4, 16), t, 0, 8.5, 0);
+  }
+  return g;
+}
+function ajustar(obj, tam, eje) {
+  obj.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(obj);
+  const size = box.getSize(V3()), c = box.getCenter(V3());
+  const ref = eje === 'max' ? Math.max(size.x, size.y, size.z) : size[eje];
+  const inner = new THREE.Group();
+  obj.position.sub(c); inner.add(obj);
+  inner.scale.setScalar(tam / (ref || 1));
+  const w = new THREE.Group(); w.add(inner); return w;
+}
+const loader = new GLTFLoader();
+function cargarModelo(ruta, tamanoObjetivo, ejeReferencia = 'y') {
+  return loader.loadAsync(ruta)
+    .then(g => ajustar(g.scene, tamanoObjetivo, ejeReferencia))
+    .catch(() => { console.warn('Usando modelo de respaldo para', ruta); return ajustar(respaldo(ruta), tamanoObjetivo, ejeReferencia); });
+}
+const MOD = {};
+const defs = [['varita', './varita.glb', .65, 'max'], ['luna', './luna.glb', 1.5, 'y'], ['estrella', './estrella.glb', 1.5, 'y'],
+  ['nube', './nube_personaje.glb', 1.5, 'y'], ['plat', './nube_plataforma.glb', 4.5, 'x'], ['castillo', './castillo.glb', 22, 'y']];
+await Promise.all(defs.map(async ([k, r, t, e]) => { MOD[k] = await cargarModelo(r, t, e); }));
+
+/* ---------- Texturas ---------- */
+function gradTex(stops) {
+  const c = document.createElement('canvas'); c.width = 4; c.height = 256;
+  const x = c.getContext('2d'), g = x.createLinearGradient(0, 0, 0, 256);
+  stops.forEach((s, i) => g.addColorStop(i / (stops.length - 1), s));
+  x.fillStyle = g; x.fillRect(0, 0, 4, 256);
+  const t = new THREE.CanvasTexture(c); t.colorSpace = THREE.SRGBColorSpace; return t;
+}
+const glow = (() => {
+  const c = document.createElement('canvas'); c.width = c.height = 64;
+  const x = c.getContext('2d'), g = x.createRadialGradient(32, 32, 0, 32, 32, 32);
+  g.addColorStop(0, 'rgba(255,255,255,1)'); g.addColorStop(.35, 'rgba(255,255,255,.6)'); g.addColorStop(1, 'rgba(255,255,255,0)');
+  x.fillStyle = g; x.fillRect(0, 0, 64, 64); return new THREE.CanvasTexture(c);
+})();
+
+/* ---------- Partículas globales ---------- */
+const NP = 1500;
+const pPos = new Float32Array(NP * 3), pCol = new Float32Array(NP * 3), pVel = new Float32Array(NP * 3),
+  pBase = new Float32Array(NP * 3), pLife = new Float32Array(NP), pMax = new Float32Array(NP).fill(1);
+for (let i = 0; i < NP; i++) pPos[i * 3 + 1] = -999;
+const pGeo = new THREE.BufferGeometry();
+pGeo.setAttribute('position', new THREE.BufferAttribute(pPos, 3));
+pGeo.setAttribute('color', new THREE.BufferAttribute(pCol, 3));
+const parts = new THREE.Points(pGeo, new THREE.PointsMaterial({ size: .4, map: glow, vertexColors: true, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
+parts.frustumCulled = false; scene.add(parts);
+let pIdx = 0;
+function emit(p, v, col, life) {
+  const i = pIdx++ % NP, k = i * 3;
+  pPos[k] = p.x; pPos[k + 1] = p.y; pPos[k + 2] = p.z;
+  pVel[k] = v.x; pVel[k + 1] = v.y; pVel[k + 2] = v.z;
+  pBase[k] = col.r; pBase[k + 1] = col.g; pBase[k + 2] = col.b;
+  pLife[i] = pMax[i] = life;
+}
+function updParts(dt) {
+  for (let i = 0; i < NP; i++) {
+    const k = i * 3;
+    if (pLife[i] <= 0) { pCol[k] = pCol[k + 1] = pCol[k + 2] = 0; continue; }
+    pLife[i] -= dt;
+    pPos[k] += pVel[k] * dt; pPos[k + 1] += pVel[k + 1] * dt; pPos[k + 2] += pVel[k + 2] * dt;
+    const f = Math.max(0, pLife[i] / pMax[i]);
+    pCol[k] = pBase[k] * f; pCol[k + 1] = pBase[k + 1] * f; pCol[k + 2] = pBase[k + 2] * f;
+  }
+  pGeo.attributes.position.needsUpdate = true; pGeo.attributes.color.needsUpdate = true;
+}
+const PAL = [0xffe27a, 0xb9a6ff, 0xffb89a, 0xffffff, 0x9fe8ff].map(c => new THREE.Color(c));
+
+/* ---------- Audio (Web Audio API) ---------- */
+let AC;
+const ac = () => { if (!AC) AC = new (window.AudioContext || window.webkitAudioContext)(); if (AC.state === 'suspended') AC.resume(); return AC; };
+function tono(f, f2, d, tipo = 'sine', v = .15, t0 = 0) {
+  const a = ac(), o = a.createOscillator(), g = a.createGain(), t = a.currentTime + t0;
+  o.type = tipo; o.frequency.setValueAtTime(f, t); o.frequency.exponentialRampToValueAtTime(f2, t + d);
+  g.gain.setValueAtTime(v, t); g.gain.exponentialRampToValueAtTime(.001, t + d);
+  o.connect(g).connect(a.destination); o.start(t); o.stop(t + d);
+}
+const sonDisparo = () => { tono(500, 1400, .18, 'sine', .12); tono(900, 1900, .12, 'triangle', .05, .03); };
+const sonCaptura = () => [660, 880, 1320, 1760].forEach((f, i) => tono(f, f * 1.02, .25, 'sine', .12, i * .07));
+const sonNivel = () => [523, 659, 784, 1047, 1319].forEach((f, i) => tono(f, f, .55, 'triangle', .12, i * .12));
+const sonFin = () => [440, 349, 262].forEach((f, i) => tono(f, f * .95, .4, 'triangle', .1, i * .18));
+function sonTrueno() {
+  const a = ac(), n = a.sampleRate * 1.8, b = a.createBuffer(1, n, a.sampleRate), d = b.getChannelData(0);
+  for (let i = 0; i < n; i++) d[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / n, 2);
+  const s = a.createBufferSource(), f = a.createBiquadFilter(), g = a.createGain();
+  s.buffer = b; f.type = 'lowpass'; f.frequency.setValueAtTime(500, a.currentTime); f.frequency.exponentialRampToValueAtTime(60, a.currentTime + 1.6);
+  g.gain.value = .9; s.connect(f).connect(g).connect(a.destination); s.start();
+}
+
+/* ---------- Varita ---------- */
+const varita = new THREE.Group();
+varita.position.set(.45, -.45, -1.1);
+const BASE = { x: -1.0, y: .15, z: .35 };
+varita.rotation.set(BASE.x, BASE.y, BASE.z);
+varita.add(MOD.varita.clone(true));
+camera.add(varita);
+
+/* ---------- Niveles ---------- */
+const NIV = [
+  { n: 'Atardecer de Algodón', meta: 6, chars: ['nube', 'estrella'], bg: ['#ffb3c7', '#ffcfae', '#c9b3f0'] },
+  { n: 'La Vía Láctea Invertida', meta: 8, chars: ['estrella', 'luna'], bg: ['#0d0a3a', '#2a1a6e', '#5b2f8f'] },
+  { n: 'Vértice de la Tormenta Nocturna', meta: 10, chars: ['luna', 'estrella', 'nube'], bg: ['#14161b', '#2a2d35', '#3d414b'] }
+];
+const SLOTS = [[-11, 1.5, -9], [-6, 4.8, -14], [-1, 2, -8], [4, 5, -15], [9, 2.6, -11], [13, 4.2, -17]];
+const CFG = { luna: { z: -18, dur: 2.4, h: 6, pau: .1 }, estrella: { z: -10, dur: .65, h: 1.6, pau: .12 }, nube: { z: -12, dur: 1.8, h: 2.5, pau: .5 } };
+
+let nivelObj = new THREE.Group(); scene.add(nivelObj);
+let lvl = 0, plats = [], chars = [], orbs = [], estrellas = null, lluvia = null;
+let estado = 'menu', cap = 0, tiempo = 60, time = 0;
+let tEstrella = 7, tViento = 6, tRayo = rand(3, 4), viento = { t: 0, dir: 1, x: 0, emit: 0 }, rayoT = 0, trueno = 0;
+
+function elegir(c) {
+  c.from = c.g.position.clone();
+  let x, y;
+  if (c.tipo === 'luna') { x = c.from.x > 0 ? -rand(8, 12) : rand(8, 12); y = 2.5; }
+  else if (lvl === 0) {
+    let s; do { s = SLOTS[Math.floor(Math.random() * SLOTS.length)]; } while (s === c.slot);
+    c.slot = s; x = s[0]; y = s[1] + 1.2;
+  } else if (c.tipo === 'estrella') {
+    x = c.from.x + c.dir * rand(3, 6);
+    if (Math.abs(x) > 11) { c.dir *= -1; x = c.from.x + c.dir * rand(3, 6); }
+    c.up = !c.up; y = c.up ? 4.6 : 1.8;
+  } else { x = rand(-10, 10); y = rand(1.5, 5); }
+  c.to = V3(x, y, c.z); c.t = 0; c.wait = 0; c.fly = true;
+}
+function crearPersonaje(tipo) {
+  const cf = CFG[tipo], g = MOD[tipo].clone(true);
+  const c = { tipo, g, z: cf.z, dur: cf.dur, h: cf.h, pau: cf.pau, dir: Math.random() < .5 ? 1 : -1, up: false, hide: 0 };
+  g.position.set(rand(-8, 8), 2.5, cf.z); nivelObj.add(g); elegir(c); return c;
+}
+function cargarNivel(n) {
+  lvl = n; const L = NIV[n];
+  scene.remove(nivelObj); nivelObj = new THREE.Group(); scene.add(nivelObj);
+  scene.background = gradTex(L.bg);
+  plats = []; chars = []; estrellas = null; lluvia = null;
+  orbs.forEach(o => scene.remove(o.m)); orbs = [];
+  const cas = MOD.castillo.clone(true); cas.position.set(0, -4, -35); nivelObj.add(cas);
+  SLOTS.forEach((s, i) => {
+    const p = MOD.plat.clone(true);
+    p.position.set(n === 1 ? -28 + i * 9.33 : s[0], s[1], s[2]);
+    nivelObj.add(p); plats.push({ g: p, s, i });
+  });
+  if (n === 1) {
+    const N = 900, a = new Float32Array(N * 3);
+    for (let i = 0; i < N; i++) {
+      const r = rand(60, 110), th = rand(0, Math.PI * 2), ph = Math.acos(rand(-.2, 1));
+      a[i * 3] = r * Math.sin(ph) * Math.cos(th); a[i * 3 + 1] = r * Math.cos(ph) - 5; a[i * 3 + 2] = r * Math.sin(ph) * Math.sin(th);
+    }
+    const gg = new THREE.BufferGeometry(); gg.setAttribute('position', new THREE.BufferAttribute(a, 3));
+    estrellas = new THREE.Points(gg, new THREE.PointsMaterial({ color: 0xfff6d8, size: 1.1, map: glow, transparent: true, depthWrite: false, blending: THREE.AdditiveBlending }));
+    estrellas.frustumCulled = false; nivelObj.add(estrellas);
+  }
+  if (n === 2) {
+    const a = new Float32Array(150 * 6);
+    for (let i = 0; i < 150; i++) { const x = rand(-28, 28), y = rand(0, 25), z = rand(-32, 8); a.set([x, y, z, x, y + 1.3, z], i * 6); }
+    const gg = new THREE.BufferGeometry(); gg.setAttribute('position', new THREE.BufferAttribute(a, 3));
+    lluvia = new THREE.LineSegments(gg, new THREE.LineBasicMaterial({ color: 0xaac4ff, transparent: true, opacity: .55 }));
+    lluvia.frustumCulled = false; nivelObj.add(lluvia);
+  }
+  L.chars.forEach(t => chars.push(crearPersonaje(t)));
+}
+
+/* ---------- Entrada ---------- */
+let mx = 0, my = 0; const sm = { x: 0, y: 0 }; let recoil = 0;
+const mira = $('#mira');
+addEventListener('pointermove', e => {
+  mx = e.clientX / innerWidth * 2 - 1; my = -(e.clientY / innerHeight * 2 - 1);
+  mira.style.transform = `translate(${e.clientX}px,${e.clientY}px)`;
+});
+canvas.addEventListener('pointerdown', e => { if (e.button === 0) disparar(); });
+const ray = new THREE.Raycaster();
+function disparar() {
+  if (estado !== 'jugando') return;
+  sonDisparo(); recoil = 1;
+  varita.updateMatrixWorld(true);
+  const tip = varita.localToWorld(V3(0, .33, 0));
+  ray.setFromCamera(new THREE.Vector2(mx + viento.x, my), camera);
+  const aim = ray.ray.at(40, V3());
+  const vel = aim.sub(tip).normalize().multiplyScalar(45);
+  const m = new THREE.Group();
+  m.add(new THREE.Mesh(new THREE.SphereGeometry(.22, 16, 12), new THREE.MeshBasicMaterial({ color: 0xffffff })));
+  const sp = new THREE.Sprite(new THREE.SpriteMaterial({ map: glow, color: 0xffe9a0, blending: THREE.AdditiveBlending, transparent: true, depthWrite: false }));
+  sp.scale.setScalar(1.6); m.add(sp); m.position.copy(tip); scene.add(m);
+  orbs.push({ m, vel, life: 1.7 });
+}
+function capturar(c) {
+  sonCaptura(); cap++;
+  for (let i = 0; i < 45; i++) emit(c.g.position, V3(rand(-6, 6), rand(-6, 6), rand(-6, 6)), PAL[i % PAL.length], rand(.5, 1.1));
+  c.g.visible = false; c.hide = time + 1.1; hudCap();
+  if (cap >= NIV[lvl].meta) terminar(true);
+}
+
+/* ---------- Flujo de UI ---------- */
+const hudCap = () => { $('#hCap').textContent = `Espíritus capturados: ${cap}/${NIV[lvl].meta}`; };
+function mostrar(id, v) { $(id).classList.toggle('hidden', !v); }
+function iniciar(n) {
+  ac(); cargarNivel(n); cap = 0; tiempo = 60; estado = 'jugando';
+  tEstrella = 7; tViento = 6; tRayo = rand(3, 4); viento.t = 0; viento.x = 0;
+  $('#hNivel').textContent = NIV[n].n; hudCap(); $('#hTime').textContent = 60;
+  mostrar('#caratula', false); mostrar('#fin', false); document.body.classList.add('play');
+}
+function menu() {
+  estado = 'menu'; document.body.classList.remove('play');
+  mostrar('#fin', false); mostrar('#caratula', true); cargarNivel(0);
+}
+function terminar(gano) {
+  estado = 'fin'; document.body.classList.remove('play');
+  const b = $('#fBtn');
+  if (gano) {
+    sonNivel();
+    $('#fTitulo').textContent = 'Nivel completado';
+    const ult = lvl === 2;
+    $('#fTexto').textContent = ult ? 'Los Espíritus Celestes vuelven a su cielo. Oneira despierta gracias a ti.' : `Atrapaste ${cap} espíritus con ${Math.ceil(tiempo)} segundos de sobra.`;
+    b.textContent = ult ? 'Jugar de nuevo' : 'Siguiente Nivel';
+    b.onclick = () => iniciar(ult ? 0 : lvl + 1);
+  } else {
+    sonFin();
+    $('#fTitulo').textContent = 'Tiempo agotado';
+    $('#fTexto').textContent = `Capturaste ${cap} de ${NIV[lvl].meta} espíritus. Inténtalo otra vez.`;
+    b.textContent = 'Reintentar'; b.onclick = () => iniciar(lvl);
+  }
+  mostrar('#fin', true);
+}
+document.querySelectorAll('.nv').forEach(b => b.addEventListener('click', () => iniciar(+b.dataset.n)));
+$('#bMenu').addEventListener('click', menu);
+$('#fMenu').addEventListener('click', menu);
+document.querySelectorAll('.nv').forEach(b => b.disabled = false);
+$('#carga').remove();
+
+/* ---------- Bucle principal ---------- */
+const flash = $('#flash'), rayoEl = $('#rayo');
+function destello(el, op, seg) {
+  el.style.transition = 'none'; el.style.opacity = op; void el.offsetWidth;
+  el.style.transition = `opacity ${seg}s ease-out`; el.style.opacity = 0;
+}
+function updChar(c, dt) {
+  const g = c.g;
+  if (c.hide > time) return;
+  if (!g.visible) { g.visible = true; g.position.set(c.tipo === 'luna' ? (Math.random() < .5 ? -11 : 11) : rand(-9, 9), 3, c.z); elegir(c); }
+  if (!c.fly) { c.wait -= dt; if (c.wait <= 0) elegir(c); }
+  else {
+    c.t += dt / c.dur; const k = Math.min(c.t, 1);
+    g.position.x = c.from.x + (c.to.x - c.from.x) * k;
+    g.position.y = c.from.y + (c.to.y - c.from.y) * k + 4 * c.h * k * (1 - k);
+    g.position.z = c.z;
+    g.rotation.z = Math.sin(k * Math.PI * 2) * .25 * Math.sign(c.to.x - c.from.x || 1);
+    if (c.t >= 1) { c.fly = false; c.wait = c.pau; g.rotation.z = 0; }
+  }
+  g.rotation.y = Math.sin(time * 1.5 + c.z) * .35;
+}
+function update(dt) {
+  const jug = estado === 'jugando';
+  chars.forEach(c => updChar(c, dt));
+  plats.forEach(p => {
+    if (lvl === 1) p.g.position.x = ((-28 + p.i * 9.33 + time * 3 + 28) % 56 + 56) % 56 - 28;
+    if (lvl === 2) p.g.visible = ((time + p.i * .75) % 4.5) < 3;
+    p.g.position.y = p.s[1] + Math.sin(time + p.i) * .15;
+  });
+  if (estrellas) estrellas.rotation.y += dt * .01;
+  if (lluvia) {
+    const a = lluvia.geometry.attributes.position.array;
+    for (let i = 0; i < 150; i++) {
+      a[i * 6 + 1] -= 35 * dt; a[i * 6 + 4] -= 35 * dt;
+      if (a[i * 6 + 1] < -2) { a[i * 6 + 1] = 25; a[i * 6 + 4] = 26.3; }
+    }
+    lluvia.geometry.attributes.position.needsUpdate = true;
+  }
+  /* varita */
+  sm.x += (mx - sm.x) * Math.min(1, dt * 8); sm.y += (my - sm.y) * Math.min(1, dt * 8);
+  recoil = Math.max(0, recoil - dt * 5);
+  varita.rotation.set(BASE.x + sm.y * .25 - recoil * .55, BASE.y - sm.x * .3, BASE.z + recoil * .45);
+  varita.position.set(.45 + sm.x * .05, -.45 + sm.y * .05, -1.1 + recoil * .12);
+  /* esferas */
+  for (let i = orbs.length - 1; i >= 0; i--) {
+    const o = orbs[i]; o.life -= dt; o.m.position.addScaledVector(o.vel, dt);
+    for (let j = 0; j < 3; j++) emit(o.m.position, V3(rand(-.8, .8), rand(-.8, .8), rand(-.8, .8)), PAL[(Math.random() * 3) | 0], .6);
+    let hit = false;
+    for (const c of chars) if (c.g.visible && c.g.position.distanceTo(o.m.position) < 1.8) { capturar(c); hit = true; break; }
+    if (hit || o.life <= 0) { scene.remove(o.m); orbs.splice(i, 1); }
+  }
+  /* eventos */
+  if (jug) {
+    tiempo -= dt; $('#hTime').textContent = Math.max(0, Math.ceil(tiempo));
+    if (tiempo <= 0) terminar(false);
+    if (chars.some(c => c.tipo === 'estrella')) { tEstrella -= dt; if (tEstrella <= 0) { tEstrella = 7; destello(flash, .7, 1); } }
+    if (chars.some(c => c.tipo === 'nube')) {
+      tViento -= dt;
+      if (tViento <= 0) { tViento = 6; viento.t = 1.5; viento.dir = Math.random() < .5 ? 1 : -1; }
+    }
+    if (viento.t > 0) {
+      viento.t -= dt; viento.x = viento.dir * .12 * Math.min(1, viento.t * 2);
+      for (let i = 0; i < 4; i++) emit(V3(-viento.dir * 30, rand(-2, 14), rand(-18, 6)), V3(viento.dir * 45, rand(-1, 1), 0), PAL[3], .9);
+    } else viento.x = 0;
+    if (lvl === 2) {
+      tRayo -= dt;
+      if (tRayo <= 0) { tRayo = rand(3, 4); amb.intensity = 7; destello(rayoEl, .75, .45); trueno = .35; }
+      if (trueno > 0) { trueno -= dt; if (trueno <= 0) sonTrueno(); }
+    }
+  }
+  amb.intensity += (1.4 - amb.intensity) * Math.min(1, dt * 6);
+  updParts(dt);
+}
+const clock = new THREE.Clock();
+function loop() {
+  const dt = Math.min(clock.getDelta(), .05); time += dt;
+  update(dt); renderer.render(scene, camera); requestAnimationFrame(loop);
+}
+cargarNivel(0);
+loop();
+</script>
+</body>
+</html>
